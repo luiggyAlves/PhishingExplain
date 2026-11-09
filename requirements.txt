@@ -1,0 +1,20 @@
+# Dados
+pandas
+pyarrow
+datasets
+
+# Contrato de saída e validação
+pydantic>=2
+
+# Cliente do professor (llama.cpp no PC, vLLM na Spark)
+openai
+
+# Baseline e métricas
+scikit-learn
+
+# Detecção de quase-duplicatas
+datasketch
+
+# Utilidades
+tqdm
+pytest

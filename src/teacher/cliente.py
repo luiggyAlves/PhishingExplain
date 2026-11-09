@@ -38,7 +38,7 @@ def perguntar(mensagens: list[dict], max_tokens=1024) -> Resposta:
     """Manda uma conversa pro modelo professor"""
     inicio = time.perf_counter()
     r = cliente.chat.completions.create(
-        model = CFG.professor.modelo,
+        model = CFG.professor_modelo,
         messages = mensagens, 
         max_tokens = max_tokens,
         **AMOSTRAGEM,
@@ -55,7 +55,7 @@ def perguntar(mensagens: list[dict], max_tokens=1024) -> Resposta:
 
     )
 
-if __name__ == "main":
+if __name__ == "__main__":
     print(f"Perfil {CFG.nome}: {CFG.professor_modelo} em {CFG.professor_url}\n")
 
     # Testando com uma pergunta simples em português
@@ -79,7 +79,7 @@ if __name__ == "main":
     email = (
         "De: seguranca@bancoexemplo-atualizacao.com\n"
         "Assunto: Sua conta será bloqueada\n\n"
-        "Prezado cliente, detectamos um acesso suspeito. Confirme seus dados em"
+        "Prezado cliente, detectamos um acesso suspeito. Confirme seus dados em "
         "http://bancoexemplo-atualizacao.com/login em até 24 horas"
     )
 
@@ -88,7 +88,7 @@ if __name__ == "main":
             {"role":"system",
             "content": (
                 "Você analisa e-mails. Responda APENAS com um objeto JSON, "
-                "sem nenhum texto antes ou depois, no formato"
+                "sem nenhum texto antes ou depois, no formato "
                 '{"phishing": true ou false, "motivo": "uma frase"}.'
             )},
             {"role": "user", "content": email},

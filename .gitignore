@@ -13,4 +13,4 @@ models/
 # Lixo do Python e do Jupyter
 __pycache__/
 *.pyc
-.ipynb_checkpoints/
+.ipynb_checkpoints/reports/inventario_raw.txt

@@ -20,4 +20,5 @@ ftfy
 
 # Utilidades
 tqdm
+tabulate  # tabelas em Markdown nos relatórios
 pytest

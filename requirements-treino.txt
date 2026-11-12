@@ -1,0 +1,4 @@
+# Treino, previsão local e checagem de vazamento (no PC: pip install -r requirements-treino.txt).
+# Na Spark a imagem da Unsloth já traz torch, unsloth, transformers e trl; o Dockerfile instala o resto sem trocar o torch.
+unsloth
+sentence-transformers

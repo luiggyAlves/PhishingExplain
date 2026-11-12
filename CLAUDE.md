@@ -61,22 +61,33 @@ O usuário está aprendendo com o projeto. Siga estas regras:
 phishexplain/
 ├── CLAUDE.md
 ├── README.md
-├── requirements.txt
-├── scripts/professor_dev.sh       # sobe o professor de desenvolvimento
+├── requirements.txt, requirements-treino.txt
+├── docker/                        # Dockerfile.unsloth (cópia do oficial da Unsloth) e Dockerfile do projeto (6.1)
+├── notebooks/spark.ipynb          # Fases 7 e 8 inteiras na Spark, até as tabelas finais
+├── scripts/
+│   ├── professor_dev.sh           # sobe o professor de desenvolvimento (PC)
+│   ├── spark_construir.sh         # 6.1: constrói as imagens na Spark
+│   └── spark_container.sh         # 6.2: sobe o container com Jupyter e o socket do Docker
 ├── splits/teste.csv               # TESTE CONGELADO: ids nunca mudam (só a coluna grupo acompanha a 1.3)
 ├── src/
-│   ├── config.py                  # perfis pc/spark, caminhos, modelos, SEMENTE=42, MAX_CHARS_EMAIL=6000
+│   ├── config.py                  # perfis pc/spark, caminhos, modelos, constantes (SEMENTE, MAX_CHARS_EMAIL, ...)
 │   ├── schema.py                  # contrato de saída, cortar(), formatar_email()
-│   ├── dados.py                   # fonte única: mestre(), teste(), emails_pt()
+│   ├── dados.py                   # fonte única: mestre(), teste(), emails_pt(), amostrar(), caminhos das anotações
 │   ├── data/                      # Fase 1: baixar, inspecionar, normalizar, limpar, agrupar, separar_teste
-│   └── teacher/
-│       ├── cliente.py             # perguntar(mensagens, max_tokens, esquema=, **amostragem) -> Retorno
-│       ├── prompts.py             # prompt do professor (2.2)
-│       ├── validar.py             # validadores (2.3)
-│       ├── lote.py                # paralelismo + JSONL incremental + retomada por id
-│       ├── traduzir.py            # EN -> PT-BR (2.4)
-│       └── anotar.py              # anotação com até 3 tentativas (2.4)
-└── tests/                         # test_schema.py, test_validar.py
+│   ├── teacher/
+│   │   ├── cliente.py             # perguntar(mensagens, max_tokens, esquema=, **amostragem) -> Retorno
+│   │   ├── prompts.py             # prompt do professor (2.2)
+│   │   ├── validar.py             # validadores (2.3)
+│   │   ├── lote.py                # paralelismo + JSONL incremental + retomada por id
+│   │   ├── traduzir.py            # EN -> PT-BR (2.4)
+│   │   ├── anotar.py              # anotação com até 3 tentativas (2.4)
+│   │   ├── cenarios.py, gerar.py  # sintéticos (3.1, 3.2)
+│   │   └── filtrar.py             # MinHash, marcadores e amostra de revisão (3.3)
+│   ├── splits.py, exportar.py, vazamento.py, prompts_aluno.py   # Fase 4
+│   ├── evaluate.py, baseline.py, train.py, prever.py             # Fase 5
+│   ├── ambiente.py, servidor.py                                  # Fase 6 (checagem e vLLM em container irmão)
+│   └── juiz.py, relatorio.py                                     # Fase 8
+└── tests/                         # test_schema.py, test_validar.py, test_evaluate.py
 ```
 
 ### Dados (em `data/interim/`, fora do git)
@@ -134,6 +145,9 @@ Os ids são fixos. Ao refazer a 1.3, `python -m src.data.separar_teste` só atua
 - **Strings adjacentes em Python são coladas sem espaço.**
 - **Contexto do professor no PC:** 8.192 tokens por requisição; o corte do `formatar_email` resolve.
 - **`Literal[tuple(...)]` no `schema.py`** pode aparecer como erro no editor; funciona em execução.
+- **`pkill -f padrão`** casa com o próprio shell que roda o comando; use `pkill -x llama-server`.
+- **Modelos Qwen3.5 pensam por padrão:** toda chamada sem saída do aluno manda `chat_template_kwargs={"enable_thinking": False}` (senão os tokens vão para o raciocínio e a resposta volta vazia).
+- **`causal_conv1d` ausente** deixa o Qwen3.5 mais lento no treino (cai na implementação de referência); opcional instalar.
 - **Na Spark:** arquivos criados pelo container pertencem ao root (`sudo chown -R $USER:$USER ~/phishexplain`); crie `~/.cache/huggingface` antes do `docker run`.
 
 ## 7. Plano
@@ -145,33 +159,37 @@ Os ids são fixos. Ao refazer a 1.3, `python -m src.data.separar_teste` só atua
 - **2.3** Validadores (`src/teacher/validar.py`).
 - **2.4** Tradução e anotação. No PC: 19 de 20 traduções e 20 de 20 anotações aprovadas (14 na 1ª tentativa).
 
-### Fase 3 — Sintéticos
+### Fase 3 — Sintéticos ✅
 
-**3.1 Matriz de cenários** (`src/teacher/cenarios.py`): cenários de phishing brasileiros, legítimos comuns e legítimos parecidos com golpe (≈ 40% dos legítimos); eixos de tom, qualidade do texto, tamanho, remetente, link/anexo e marcadores `[EMAIL]`/`[LINK]` com a mesma frequência nas duas classes.
+- **3.1** `cenarios.py`: 14 cenários de golpe, 7 legítimos parecidos com golpe (40% dos legítimos) e 7 legítimos comuns. Eixos sorteados sem olhar o rótulo; `[EMAIL]`/`[LINK]` em ~50% das duas classes.
+- **3.2** `gerar.py`: o professor escreve o e-mail com saída estruturada; reprova marcador pedido que faltou e marcador não pedido. Meta `SINTETICOS_META = 2000`, ids `sintetico:<i>`, grupos `sint:<i>`.
+- **3.3** `filtrar.py`: MinHash contra toda a tabela mestre (teste incluído) e entre sintéticos; tabela de marcadores; `data/interim/revisao_sinteticos.md` com 50 exemplos para o usuário. Rodar antes e depois da anotação.
+- No PC: 23 de 40 aprovados (todas as reprovações por marcador; o 4B põe `[LINK]` em golpes sem pedido).
 
-**3.2 Geração** (`src/teacher/gerar.py`): o professor escreve o e-mail (`remetente`, `assunto`, `corpo`) a partir de cenário, rótulo e eixos sorteados. Linhas com `fonte="sintetico"`, `autoria="llm"`, grupo próprio. Meta: 2.000 (metade de cada classe).
+### Fase 4 — Splits ✅
 
-**3.3 Filtros** (`src/teacher/filtrar.py`): MinHash contra toda a tabela mestre, incluindo o teste; tabela de marcadores por fonte e rótulo; amostra de 50 para o usuário revisar. Depois os sintéticos aprovados passam pela anotação.
+- **4.1** `splits.py`: 90/10 por grupo com `StratifiedGroupKFold`, estratos origem|fonte|rótulo. Grava `splits/treino.csv` e `splits/validacao.csv` (só commitar os da Spark).
+- **4.2** `vazamento.py`: MinHash + `intfloat/multilingual-e5-small` (o `embeddinggemma` exige aceite de licença). Os cossenos do e5 ficam perto de 0,9; limiar de revisão 0,97; `reports/vazamento.csv` ordenado.
+- **4.3** `exportar.py` + `prompts_aluno.py`: `data/processed/{train,val,test}.jsonl`. O teste leva a anotação do professor em `referencia`.
 
-### Fase 4 — Splits
+### Fase 5 — Avaliador e treino em miniatura ✅
 
-**4.1** Treino e validação 90/10, por grupo, estratificados por origem, fonte e rótulo, só com anotação aprovada. Ids em `splits/`.
-**4.2** Vazamento: MinHash e embeddings multilíngues entre treino/validação e teste.
-**4.3** Exportação em formato de conversa (`data/processed/*.jsonl`) com o **prompt do aluno** (`src/prompts_aluno.py`), que nunca recebe o rótulo.
+- **5.1** `evaluate.py`: por recorte e total, precisão/recall/F1/taxa de falso positivo com IC por bootstrap, JSON válido, ancoragem, cobertura de tipos, tokens e tempo; `campanhas_rnp()`; `comparar()` (McNemar exato pareado). Previsão sem classificação legível conta como erro.
+- **5.2** `baseline.py`: TF-IDF (palavras + caracteres) + regressão logística.
+- **5.3** `train.py`: Unsloth `FastModel` em bf16, LoRA r=16/alpha=16/dropout 0 nas camadas de linguagem (visão congelada), lr 2e-4 cosseno, `warmup_steps=0.05` (o transformers 5 tirou o `warmup_ratio`), 2 épocas, lote efetivo 16, `MAX_TOKENS_TREINO = 2048` (conversas maiores ficam de fora e são contadas). Formato prompt/completion do TRL com `completion_only_loss`: o prompt é renderizado pelo template do modelo com `enable_thinking=False`, igual à inferência; isso substitui o `train_on_responses_only` e funciona igual nos três alunos.
+- `prever.py`: previsões por API OpenAI (vLLM ou llama.cpp), temperatura 0, sem saída estruturada.
+- PC: transformers 5.17, trl 1.15, unsloth 2026.11.4, torch 2.14.1+cu130 (o unsloth baixou o `datasets` para 4.8.5).
 
-### Fase 5 — Avaliador e treino em miniatura (PC)
+### Fase 6 — Migração para a Spark ✅ (código; execução na Spark pelo usuário)
 
-**5.1** Avaliador (`src/evaluate.py`), por recorte: precisão, recall, F1, taxa de falso positivo com IC por bootstrap; JSON válido; ancoragem; cobertura de tipos; tokens e tempo; recall por campanha no RNP.
-**5.2** Baseline TF-IDF + regressão logística.
-**5.3** `src/train.py --aluno <apelido>` (Unsloth + TRL, LoRA r=16, alpha=16, dropout 0, todas as camadas lineares, lr 2e-4 cosseno, 5% warmup, 2 épocas, batch efetivo 16, 2.048 tokens, loss só no assistant, validação a cada 100 passos). `src/prever.py` gera respostas sem saída estruturada.
+- **6.1** `scripts/spark_construir.sh`: imagem `unsloth-dgx-spark` (Dockerfile oficial) e `phishexplain-unsloth:0.1` (+ projeto, Jupyter, SDK do Docker, com o torch da NGC travado).
+- **6.2** `scripts/spark_container.sh` + `python -m src.ambiente`.
+- **6.3** `git clone` + `rsync` de `data/interim/` (basta a tabela mestre; o notebook apaga as saídas do professor de desenvolvimento).
+- **6.4** `src/servidor.py`: o vLLM roda num container irmão (a imagem da Unsloth não traz vLLM), pela imagem `PHISH_VLLM_IMAGEM` (padrão `nvcr.io/nvidia/vllm:26.09-py3`; a 26.01 traz vLLM 0.13 e não serve). Um modelo por vez; parar antes de treinar.
 
-### Fase 6 — Migração para a Spark
+### Fases 7 e 8 — Rodada completa e resultados (notebook)
 
-**6.1** Imagem `phishexplain-unsloth:0.1`. **6.2** Container e checagem de ambiente. **6.3** Clone e `rsync` de `data/interim/`. **6.4** Professor no vLLM, porta 8000.
-
-### Fases 7 e 8 — Rodada completa e resultados
-
-Rodam pelo notebook da Spark (pedido do usuário em 2026-11-12): tradução, sintéticos, anotação, splits, zero-shot, treinos (Gemma 4 E2B, Qwen3.5-4B, S5-nano), previsões, métricas por recorte, baseline, juiz e tabelas finais.
+`notebooks/spark.ipynb`, pedido do usuário em 2026-11-12: vazão do professor e estimativa de tempo; tradução, sintéticos e anotação; splits, exportação, vazamento; professor, baseline e alunos em zero-shot; treinos (Gemma 4 E2B, Qwen3.5-4B, S5-nano); previsões com LoRA; juiz `mistralai/Mistral-Small-3.2-24B-Instruct-2506` (outra família, cego); `reports/resultados.md` com métricas por recorte, McNemar das perguntas de pesquisa, recall por campanha do RNP, notas do juiz, erros por fonte e marcadores do treino.
 
 ### Fase 9 — Opcional
 
@@ -179,18 +197,21 @@ Exportar o melhor modelo para GGUF.
 
 ## 8. Próximo passo
 
-**Fase 3.** O usuário autorizou seguir direto até a Fase 6 e depois criar o notebook da Spark.
+**Rodar o notebook na Spark** (passos de preparo na primeira célula). Depois: revisar `data/interim/revisao_sinteticos.md` (50 sintéticos), `reports/vazamento.csv` (topo) e dar notas aos 30 casos de `reports/calibracao_juiz.md`; commitar `splits/treino.csv`, `splits/validacao.csv` e `reports/`; preencher resultados e limitações do `README.md`.
+
+Pontos a confirmar na primeira execução na Spark: a tag da imagem do vLLM (precisa de vLLM >= 0.17 com Qwen3.5); se o vLLM aceita os adaptadores LoRA dos alunos multimodais com `--language-model-only`; o template do Gemma 4 no `train.prompt_completion` (se não renderizar como prefixo, cai no `eos_token`).
 
 ## 9. Andamento
 
 - [x] Fase 0: ambiente, config e professor de desenvolvimento
 - [x] Fase 1: dados (refeita a 1.3 em 2026-11-11/12: espaços e mojibake)
 - [x] Fase 2: contrato, prompt, validadores, tradução e anotação
-- [ ] Fase 3: sintéticos
-- [ ] Fase 4: splits
-- [ ] Fase 5: avaliador e treino em miniatura
-- [ ] Fase 6: migração para a Spark
-- [ ] Notebook da Spark (Fases 7 e 8)
+- [x] Fase 3: sintéticos (código; testado no PC)
+- [x] Fase 4: splits, exportação, vazamento (código; testado no PC)
+- [x] Fase 5: avaliador, baseline, treino em miniatura (Qwen3.5-0.8B no PC)
+- [x] Fase 6: Dockerfile, scripts, checagem de ambiente, vLLM em container (não executado: precisa da Spark)
+- [x] Notebook da Spark (Fases 7 e 8) escrito
+- [ ] Rodada completa na Spark (usuário)
 - [ ] Fase 9: demo (opcional)
 
 Atualize esta lista ao concluir cada passo.

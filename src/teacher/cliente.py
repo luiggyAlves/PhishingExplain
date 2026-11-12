@@ -27,26 +27,29 @@ cliente = OpenAI(
 )
 
 @dataclass
-class Resposta:
+class Retorno:
     texto: str
     tokens_entrada: int 
     tokens_saida: int 
     segundos: float 
     cortada: bool 
 
-def perguntar(mensagens: list[dict], max_tokens=1024) -> Resposta:
-    """Manda uma conversa pro modelo professor"""
+def perguntar(mensagens: list[dict], max_tokens=1024, esquema=None) -> Retorno:
+    """Manda uma conversa pro modelo professor; com `esquema` (modelo pydantic), força a saída nesse JSON."""
+    formato = {"response_format": {"type": "json_schema", "json_schema": {
+        "name": esquema.__name__, "schema": esquema.model_json_schema()}}} if esquema else {}
     inicio = time.perf_counter()
     r = cliente.chat.completions.create(
         model = CFG.professor_modelo,
         messages = mensagens, 
         max_tokens = max_tokens,
         **AMOSTRAGEM,
+        **formato,
     )
     duracao = time.perf_counter() - inicio
     escolha = r.choices[0]
 
-    return Resposta(
+    return Retorno(
         texto=escolha.message.content or "",
         tokens_entrada=r.usage.prompt_tokens,
         tokens_saida=r.usage.completion_tokens,

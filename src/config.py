@@ -13,6 +13,8 @@ MODELOS_LOCAIS = RAIZ / "models"
 SAIDAS = RAIZ / "outputs"
 RELATORIOS = RAIZ / "reports"
 
+MAX_CHARS_EMAIL = 6000  # corpo enviado a professor, alunos e avaliação (~1.500 tokens); cortado no último parágrafo antes disso
+
 SEMENTE = 42 # permite que tudo que é "aleatório" como split de dados etc, tem que ser igual nos dois lado para permitir reprodutibilidade
 
 @dataclass(frozen=True) # cria uma classe, um tipo de dados sem construtor e o frozen torna constante, n pode mudar nada

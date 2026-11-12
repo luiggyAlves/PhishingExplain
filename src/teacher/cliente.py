@@ -34,8 +34,9 @@ class Retorno:
     segundos: float 
     cortada: bool 
 
-def perguntar(mensagens: list[dict], max_tokens=1024, esquema=None) -> Retorno:
-    """Manda uma conversa pro modelo professor; com `esquema` (modelo pydantic), força a saída nesse JSON."""
+def perguntar(mensagens: list[dict], max_tokens=1024, esquema=None, **opcoes) -> Retorno:
+    """Manda uma conversa pro modelo professor; com `esquema` (modelo pydantic), força a saída nesse JSON.
+    `opcoes` sobrescreve a amostragem padrão (ex.: temperature=0.2)."""
     formato = {"response_format": {"type": "json_schema", "json_schema": {
         "name": esquema.__name__, "schema": esquema.model_json_schema()}}} if esquema else {}
     inicio = time.perf_counter()
@@ -43,7 +44,7 @@ def perguntar(mensagens: list[dict], max_tokens=1024, esquema=None) -> Retorno:
         model = CFG.professor_modelo,
         messages = mensagens, 
         max_tokens = max_tokens,
-        **AMOSTRAGEM,
+        **(AMOSTRAGEM | opcoes),
         **formato,
     )
     duracao = time.perf_counter() - inicio

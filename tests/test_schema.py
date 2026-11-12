@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from src.schema import Resposta, formatar_email
+from src.schema import Resposta, cortar, formatar_email
 
 OK = {
     "indicadores": [{"tipo": "urgencia", "trecho": "sua conta será bloqueada em 24 horas"}],
@@ -30,3 +30,10 @@ def test_invalidas(mudanca):
 def test_formatar_email():
     assert formatar_email(None, float("nan"), "Olá") == "Olá"
     assert formatar_email("a@b.com", "Oi", "Olá") == "De: a@b.com\nAssunto: Oi\n\nOlá"
+
+
+def test_cortar():
+    texto = "a" * 40 + "\n\n" + "b" * 40 + "\n\n" + "c" * 40
+    assert cortar(texto, 1000) == texto
+    assert cortar(texto, 90) == "a" * 40 + "\n\n" + "b" * 40
+    assert cortar("x" * 100, 50) == "x" * 50

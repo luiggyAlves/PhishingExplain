@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from src.config import MAX_CHARS_EMAIL
+
 # Aqui são os dicionários que o professor irá usar tanto para avaliar se um possível email é phishing ou não. Ele vai "avaliar" em termos de phishing os sinais como urgencia e ameaça e avaliar a legitimidade em termos de dominio oficial, informações confiaveis etc. É importante que isso aqui esteja bem delimitado para que possamos comparar os modelos e para que o LLM não halucine em causas inexistentes de phishing, que ele mesmo inventou
 
 PHISHING = {
@@ -58,7 +60,17 @@ class Resposta(BaseModel):
         return self
 
 
+def cortar(texto: str, limite: int = MAX_CHARS_EMAIL) -> str:
+    """Corta no último parágrafo (ou linha, ou palavra) antes do limite, sem perder mais da metade."""
+    if len(texto) <= limite:
+        return texto
+    corte = texto[:limite]
+    pos = next((p for sep in ("\n\n", "\n", " ") if (p := corte.rfind(sep)) > limite // 2), limite)
+    return corte[:pos].rstrip()
+
+
 def formatar_email(remetente, assunto, corpo) -> str:
-    """O e-mail como o modelo o vê; os trechos citados vêm deste texto."""
+    """O e-mail como o modelo o vê (corpo já cortado); os trechos citados vêm deste texto."""
+    corpo = cortar(corpo)
     cab = [f"{r}: {v}" for r, v in (("De", remetente), ("Assunto", assunto)) if isinstance(v, str) and v]
     return "\n".join(cab) + "\n\n" + corpo if cab else corpo

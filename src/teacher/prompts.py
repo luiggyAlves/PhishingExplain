@@ -1,13 +1,13 @@
 # Prompt do professor: recebe o e-mail e o rótulo correto e devolve as evidências e a explicação no formato do contrato (src/schema.py)
 
 import json
-import re
 
 import pandas as pd
 
 from src.config import DADOS_INTERIM, RAIZ, SEMENTE
 from src.schema import LEGITIMIDADE, PHISHING, Resposta, formatar_email
 from src.teacher.cliente import perguntar
+from src.teacher.validar import validar
 
 lista = lambda sinais: "\n".join(f"- {k}: {v}" for k, v in sinais.items())
 
@@ -46,10 +46,10 @@ if __name__ == "__main__":
     livres = df[(df.fonte == "pf_semente") & ~df.grupo.isin(reservados)]
     amostra = livres.groupby("rotulo").sample(2, random_state=SEMENTE).query("rotulo != 'spam'")
 
-    menciona_rotulo = re.compile(r"classifica\w*\s+(foi\s+)?(informad|fornecid|recebid|dad)", re.I)
     validas = 0
     for _, e in amostra.iterrows():
-        r = perguntar(mensagens(formatar_email(e.remetente, e.assunto, e.corpo), e.rotulo), esquema=Resposta)
+        email = formatar_email(e.remetente, e.assunto, e.corpo)
+        r = perguntar(mensagens(email, e.rotulo), esquema=Resposta)
         print(f"\n=== {e.id} ({e.rotulo}) {r.segundos:.1f} s, {r.tokens_entrada} + {r.tokens_saida} tokens"
               f"{' CORTADA' if r.cortada else ''}")
         print(r.texto)
@@ -57,7 +57,7 @@ if __name__ == "__main__":
             Resposta.model_validate_json(r.texto)
             validas += 1
             ordem = list(json.loads(r.texto)) == list(Resposta.model_fields)
-            print(f"válida | ordem do contrato: {ordem} | menciona rótulo: {bool(menciona_rotulo.search(r.texto))}")
+            print(f"válida | ordem do contrato: {ordem} | erros dos validadores: {validar(r.texto, email, e.rotulo)}")
         except ValueError as erro:
             print("INVÁLIDA:", erro)
     print(f"\n{validas}/{len(amostra)} respostas passam no contrato")

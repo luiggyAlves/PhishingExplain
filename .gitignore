@@ -13,4 +13,7 @@ models/
 # Lixo do Python e do Jupyter
 __pycache__/
 *.pyc
-.ipynb_checkpoints/reports/inventario_raw.txt
+.ipynb_checkpoints/
+
+# Inventário bruto da Fase 1
+reports/inventario_raw.txt

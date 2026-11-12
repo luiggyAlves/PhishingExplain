@@ -8,8 +8,7 @@ import json
 
 import pandas as pd
 
-from src.config import CFG, DADOS_INTERIM, SEMENTE
-from src.dados import emails_pt, teste
+from src.dados import ANOTACOES, ANOTACOES_TESTE, amostrar, emails_pt, teste
 from src.schema import Resposta, formatar_email
 from src.teacher.cliente import perguntar
 from src.teacher.lote import ler, rodar
@@ -18,8 +17,7 @@ from src.teacher.traduzir import como_itens
 from src.teacher.validar import validar
 
 TENTATIVAS = 3
-ARQUIVOS = {do_teste: (DADOS_INTERIM / f"anotacoes{s}.jsonl", DADOS_INTERIM / f"anotacoes{s}_reprovadas.jsonl")
-            for do_teste, s in ((False, ""), (True, "_teste"))}
+ARQUIVOS = {do_teste: (a, a.with_name(a.stem + "_reprovadas.jsonl")) for do_teste, a in ((False, ANOTACOES), (True, ANOTACOES_TESTE))}
 
 
 def anotar(e: dict) -> dict:
@@ -47,12 +45,9 @@ def anotar(e: dict) -> dict:
 def selecionar(do_teste: bool) -> pd.DataFrame:
     pt, split = emails_pt(), teste()
     if do_teste:  # nativos do teste + traduções das sementes do teste
-        return pt[pt.id_original.isin(split.id)]
+        return amostrar(pt[pt.id_original.isin(split.id)], ["origem", "rotulo"])
     livres = pt[pt.rotulo.isin(["phishing", "legitimo"]) & ~pt.grupo.isin(split.grupo)]
-    if not (n := CFG.limite_exemplos):
-        return livres
-    estratos = livres.groupby(["origem", "rotulo"])  # no PC: amostra equilibrada por origem e rótulo
-    return livres.sample(frac=1, random_state=SEMENTE).groupby(["origem", "rotulo"]).head(max(1, n // estratos.ngroups))
+    return amostrar(livres, ["origem", "rotulo"])
 
 
 if __name__ == "__main__":

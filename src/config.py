@@ -14,6 +14,10 @@ SAIDAS = RAIZ / "outputs"
 RELATORIOS = RAIZ / "reports"
 
 MAX_CHARS_EMAIL = 6000  # corpo enviado a professor, alunos e avaliação (~1.500 tokens); cortado no último parágrafo antes disso
+SINTETICOS_META = 2000  # e-mails sintéticos gerados na Spark (metade de cada classe)
+EMBEDDINGS_MODELO = "intfloat/multilingual-e5-small"  # checagem de vazamento (4.2); aberto, multilíngue, 512 tokens
+MAX_TOKENS_TREINO = 2048  # comprimento máximo de uma conversa no treino; as mais longas ficam de fora
+JUIZ_MODELO = "mistralai/Mistral-Small-3.2-24B-Instruct-2506"  # 8.2: família diferente da Qwen e da Gemma, Apache 2.0
 
 SEMENTE = 42 # permite que tudo que é "aleatório" como split de dados etc, tem que ser igual nos dois lado para permitir reprodutibilidade
 
@@ -25,6 +29,7 @@ class Perfil:
     professor_paralelo: int 
     limite_exemplos: int | None 
     alunos: dict[str, str]
+    lote_por_passo: int  # exemplos por passo no treino; o resto do lote efetivo de 16 vem de acumulação de gradiente
 
 # A gente faz um perfil de teste, bem fraco no PC e roda o real na spark, o do PC serve pra ver se a lógica tá certa e o que efetivamente é executado roda na spark, perfil basicamente vai servir pra na hora do comando a gente escolher o que rodar
 PERFIS = {
@@ -37,18 +42,20 @@ PERFIS = {
         alunos={
             "qwen35-08b":"Qwen/Qwen3.5-0.8B"
         },
+        lote_por_passo=2,
     ),
     "spark":Perfil(
         nome="spark",
         professor_url="http://localhost:8000/v1",
         professor_modelo="Qwen/Qwen3.5-27B",
         professor_paralelo = 32,
-        limite_exemplos=None, 
+        limite_exemplos=int(os.environ["PHISH_LIMITE"]) if os.environ.get("PHISH_LIMITE") else None,  # o notebook usa para medir a vazão
         alunos={
             "gemma4-e2b": "google/gemma-4-E2B-it",
             "qwen35-4b": "Qwen/Qwen3.5-4B",
             "s5-nano": "maritaca-ai/S5-nano",
         },
+        lote_por_passo=8,
     ),
 }
 

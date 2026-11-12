@@ -9,8 +9,8 @@ import re
 import pandas as pd
 from pydantic import BaseModel
 
-from src.config import CFG, DADOS_INTERIM, SEMENTE
-from src.dados import TRADUCOES, mestre, teste
+from src.config import DADOS_INTERIM, SEMENTE
+from src.dados import TRADUCOES, amostrar, mestre, teste
 from src.schema import cortar
 from src.teacher.cliente import perguntar
 from src.teacher.lote import rodar
@@ -54,13 +54,11 @@ def traduzir(e: dict) -> dict:
 def selecionar(do_teste: bool) -> pd.DataFrame:
     df, split = mestre(), teste()
     if do_teste:
-        return df[df.id.isin(split.id[split.recorte == "traduzido"])]
+        return amostrar(df[df.id.isin(split.id[split.recorte == "traduzido"])], ["rotulo"])
     livres = df[(df.idioma == "en") & df.rotulo.isin(["phishing", "legitimo"]) & ~df.grupo.isin(split.grupo)]
     sementes = livres[livres.fonte == "pf_semente"]
     variantes = livres[livres.fonte == "pf_variante"].groupby("grupo").sample(1, random_state=SEMENTE)  # 1 por grupo
-    escolhidos = pd.concat([sementes, variantes])
-    n = CFG.limite_exemplos
-    return escolhidos.groupby("rotulo").sample(n // 2, random_state=SEMENTE) if n else escolhidos
+    return amostrar(pd.concat([sementes, variantes]), ["rotulo"])
 
 
 def como_itens(df: pd.DataFrame) -> list[dict]:

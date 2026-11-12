@@ -1,6 +1,6 @@
 # Anotação pelo professor: para cada e-mail em português, pede indicadores, classificação e explicação,
 # valida (2.3) e, se falhar, devolve os erros ao professor e pede de novo.
-# Uso: python -m src.teacher.anotar           (treino: fontes em português + traduções, fora dos grupos de teste)
+# Uso: python -m src.teacher.anotar           (treino: nativos, traduções e sintéticos fora dos grupos de teste)
 #      python -m src.teacher.anotar --teste   (os 399 do teste, só como referência da avaliação, em arquivo separado)
 
 import argparse
@@ -8,15 +8,18 @@ import json
 
 import pandas as pd
 
-from src.config import CFG, DADOS_INTERIM, RAIZ, SEMENTE
+from src.config import CFG, DADOS_INTERIM, SEMENTE
+from src.dados import emails_pt, teste
 from src.schema import Resposta, formatar_email
 from src.teacher.cliente import perguntar
 from src.teacher.lote import ler, rodar
 from src.teacher.prompts import mensagens
-from src.teacher.traduzir import APROVADAS as TRADUCOES, como_itens
+from src.teacher.traduzir import como_itens
 from src.teacher.validar import validar
 
 TENTATIVAS = 3
+ARQUIVOS = {do_teste: (DADOS_INTERIM / f"anotacoes{s}.jsonl", DADOS_INTERIM / f"anotacoes{s}_reprovadas.jsonl")
+            for do_teste, s in ((False, ""), (True, "_teste"))}
 
 
 def anotar(e: dict) -> dict:
@@ -41,28 +44,23 @@ def anotar(e: dict) -> dict:
             "segundos": round(segundos, 1)}
 
 
-def selecionar(teste: bool) -> pd.DataFrame:
-    """E-mails em português: os da tabela mestre mais as traduções aprovadas."""
-    df = pd.read_parquet(DADOS_INTERIM / "emails_agrupados.parquet")
-    traducoes = pd.DataFrame(ler(TRADUCOES), columns=["id", "id_original", "grupo", "rotulo", "remetente", "assunto", "corpo"])
-    split = pd.read_csv(RAIZ / "splits" / "teste.csv")
-    if teste:
-        return pd.concat([df[df.id.isin(split.id) & (df.idioma == "pt")], traducoes[traducoes.id_original.isin(split.id)]])
-    pt = df[(df.idioma == "pt") & df.rotulo.isin(["phishing", "legitimo"])].assign(traduzido=False)
-    todos = pd.concat([pt, traducoes.assign(traduzido=True)])
-    livres = todos[~todos.grupo.isin(split.grupo)]
-    n = CFG.limite_exemplos  # no PC: metade traduzidos, metade nativos, metade de cada rótulo
-    return livres.sample(frac=1, random_state=SEMENTE).groupby(["traduzido", "rotulo"]).head(n // 4) if n else livres
+def selecionar(do_teste: bool) -> pd.DataFrame:
+    pt, split = emails_pt(), teste()
+    if do_teste:  # nativos do teste + traduções das sementes do teste
+        return pt[pt.id_original.isin(split.id)]
+    livres = pt[pt.rotulo.isin(["phishing", "legitimo"]) & ~pt.grupo.isin(split.grupo)]
+    if not (n := CFG.limite_exemplos):
+        return livres
+    estratos = livres.groupby(["origem", "rotulo"])  # no PC: amostra equilibrada por origem e rótulo
+    return livres.sample(frac=1, random_state=SEMENTE).groupby(["origem", "rotulo"]).head(max(1, n // estratos.ngroups))
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--teste", action="store_true", help="anota o teste, só como referência para a avaliação")
-    teste = ap.parse_args().teste
-    sufixo = "_teste" if teste else ""
-    aprovadas, reprovadas = DADOS_INTERIM / f"anotacoes{sufixo}.jsonl", DADOS_INTERIM / f"anotacoes{sufixo}_reprovadas.jsonl"
-
-    emails = selecionar(teste)[["id", "rotulo", "remetente", "assunto", "corpo"]]
+    do_teste = ap.parse_args().teste
+    aprovadas, reprovadas = ARQUIVOS[do_teste]
+    emails = selecionar(do_teste)[["id", "rotulo", "remetente", "assunto", "corpo"]]
     rodar(como_itens(emails), anotar, aprovadas, reprovadas)
 
     ok, ruins = ler(aprovadas), ler(reprovadas)

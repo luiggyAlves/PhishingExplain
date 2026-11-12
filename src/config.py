@@ -33,7 +33,7 @@ PERFIS = {
         professor_url="http://localhost:8080/v1",
         professor_modelo="professor-dev",
         professor_paralelo=2,
-        limite_exemplos=20,
+        limite_exemplos=int(os.environ.get("PHISH_LIMITE", 20)),  # dá para subir no PC: PHISH_LIMITE=80 python -m ...
         alunos={
             "qwen35-08b":"Qwen/Qwen3.5-0.8B"
         },

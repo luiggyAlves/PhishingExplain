@@ -1,5 +1,5 @@
-# Tradução EN -> PT-BR pelo professor. Cada tradução vira uma linha nova (<id>@pt) com o mesmo grupo do original.
-# Uso: python -m src.teacher.traduzir           (sementes livres, para o treino)
+# Tradução EN -> PT-BR pelo professor. Cada tradução vira uma linha <id>@pt; grupo, fonte e rótulo vêm do original (src/dados.py).
+# Uso: python -m src.teacher.traduzir           (treino: sementes livres + 1 variante por grupo livre)
 #      python -m src.teacher.traduzir --teste   (sementes do recorte "traduzido" do teste)
 
 import argparse
@@ -9,12 +9,12 @@ import re
 import pandas as pd
 from pydantic import BaseModel
 
-from src.config import CFG, DADOS_INTERIM, RAIZ, SEMENTE
+from src.config import CFG, DADOS_INTERIM, SEMENTE
+from src.dados import TRADUCOES, mestre, teste
 from src.schema import cortar
 from src.teacher.cliente import perguntar
 from src.teacher.lote import rodar
 
-APROVADAS = DADOS_INTERIM / "traducoes.jsonl"
 REPROVADAS = DADOS_INTERIM / "traducoes_reprovadas.jsonl"
 AMOSTRAGEM = {"temperature": 0.2, "presence_penalty": 0.0}  # tradução fiel: pouca variação e sem punir repetição de termos
 PRESERVAR = re.compile(r"https?://\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.]+|\[EMAIL\]|\[LINK\]")
@@ -36,32 +36,31 @@ class Traducao(BaseModel):
 
 
 def traduzir(e: dict) -> dict:
-    original = {"assunto": e["assunto"] if isinstance(e["assunto"], str) else "", "corpo": cortar(e["corpo"])}
+    original = {"assunto": e["assunto"] or "", "corpo": cortar(e["corpo"])}
     r = perguntar(
         [{"role": "system", "content": SISTEMA}, {"role": "user", "content": json.dumps(original, ensure_ascii=False)}],
         max_tokens=4096, esquema=Traducao, **AMOSTRAGEM,
     )
     try:
         t = Traducao.model_validate_json(r.texto)
-        faltando = [x for x in PRESERVAR.findall(original["assunto"] + "\n" + original["corpo"])
-                    if x not in t.assunto + "\n" + t.corpo]
-        erros = ["resposta cortada"] * r.cortada + [f"não preservou {x!r}" for x in dict.fromkeys(faltando)]
     except ValueError as erro:
-        return {"erros": [f"JSON inválido: {erro}"], "texto": r.texto}
-    return {"id_original": e["id_original"], "fonte": e["fonte"], "grupo": e["grupo"], "autoria": e["autoria"],
-            "rotulo": e["rotulo"], "remetente": e["remetente"], "assunto": t.assunto or None, "corpo": t.corpo,
-            "idioma": "pt", "traduzido": True, "erros": erros, "segundos": round(r.segundos, 1)}
+        return {"id_original": e["id_original"], "erros": [f"JSON inválido: {erro}"], "texto": r.texto}
+    faltando = [x for x in PRESERVAR.findall(original["assunto"] + "\n" + original["corpo"]) if x not in t.assunto + "\n" + t.corpo]
+    erros = ["resposta cortada"] * r.cortada + [f"não preservou {x!r}" for x in dict.fromkeys(faltando)]
+    return {"id_original": e["id_original"], "assunto": t.assunto or None, "corpo": t.corpo, "erros": erros,
+            "segundos": round(r.segundos, 1)}
 
 
-def selecionar(teste: bool) -> pd.DataFrame:
-    df = pd.read_parquet(DADOS_INTERIM / "emails_agrupados.parquet")
-    split = pd.read_csv(RAIZ / "splits" / "teste.csv")
-    if teste:
+def selecionar(do_teste: bool) -> pd.DataFrame:
+    df, split = mestre(), teste()
+    if do_teste:
         return df[df.id.isin(split.id[split.recorte == "traduzido"])]
-    livres = df[(df.fonte == "pf_semente") & (df.idioma == "en") & df.rotulo.isin(["phishing", "legitimo"])
-                & ~df.grupo.isin(split.grupo)]
+    livres = df[(df.idioma == "en") & df.rotulo.isin(["phishing", "legitimo"]) & ~df.grupo.isin(split.grupo)]
+    sementes = livres[livres.fonte == "pf_semente"]
+    variantes = livres[livres.fonte == "pf_variante"].groupby("grupo").sample(1, random_state=SEMENTE)  # 1 por grupo
+    escolhidos = pd.concat([sementes, variantes])
     n = CFG.limite_exemplos
-    return livres.groupby("rotulo").sample(n // 2, random_state=SEMENTE) if n else livres
+    return escolhidos.groupby("rotulo").sample(n // 2, random_state=SEMENTE) if n else escolhidos
 
 
 def como_itens(df: pd.DataFrame) -> list[dict]:
@@ -72,6 +71,6 @@ def como_itens(df: pd.DataFrame) -> list[dict]:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--teste", action="store_true", help="traduz o recorte 'traduzido' do teste")
-    originais = selecionar(ap.parse_args().teste)[["id", "fonte", "grupo", "autoria", "rotulo", "remetente", "assunto", "corpo"]]
+    originais = selecionar(ap.parse_args().teste)[["id", "assunto", "corpo"]]
     itens = [e | {"id": f"{e['id']}@pt", "id_original": e["id"]} for e in como_itens(originais)]
-    rodar(itens, traduzir, APROVADAS, REPROVADAS)
+    rodar(itens, traduzir, TRADUCOES, REPROVADAS)

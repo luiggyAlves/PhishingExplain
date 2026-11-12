@@ -124,7 +124,15 @@ Baselines: Os três modelos em zero-shot e o próprio professor.
 
 ## Como reproduzir
 
-O desenvolvimento acontece num PC com GPU pequena; o trabalho pesado roda numa NVIDIA DGX Spark. O perfil é escolhido pela variável `PHISH_PERFIL` (`pc` ou `spark`).
+Os dados não estão no repositório: as bases têm licenças variadas (a base PT-BR não tem licença de redistribuição). O passo `src.data.baixar` baixa tudo das fontes originais, e o restante da Fase 1 reconstrói a tabela de forma determinística. O teste congelado (`splits/teste.csv`) está no repositório, então todo mundo avalia nos mesmos e-mails.
+
+### Na NVIDIA DGX Spark (rodada completa)
+
+Abra `notebooks/spark.ipynb` no JupyterLab do host e rode tudo (`Run All`). O notebook clona este repositório, constrói as imagens Docker, reconstrói os dados, sobe cada LLM no vLLM (professor, alunos e juiz), traduz, gera e anota os dados, treina os três alunos com LoRA, avalia e mostra as tabelas de resultados. Precisa de Docker com GPU e de cerca de 250 GB livres; nenhum modelo exige aceite de licença.
+
+### Em outra máquina (passo a passo)
+
+O perfil é escolhido pela variável `PHISH_PERFIL` (`pc`, padrão, com amostras pequenas para testar o código; ou `spark`, rodada completa). O professor precisa estar servido numa API compatível com OpenAI (`CFG.professor_url`), como o vLLM ou o llama.cpp (`scripts/professor_dev.sh`).
 
 ```bash
 conda create -n phishexplain python=3.12 -y
@@ -137,7 +145,24 @@ python -m src.data.inspecionar    # inventário das bases brutas
 python -m src.data.normalizar     # esquema único
 python -m src.data.limpar         # limpeza e duplicatas exatas
 python -m src.data.agrupar        # grupos de quase-duplicatas
-python -m src.data.separar_teste  # congela o teste (só na primeira vez)
+python -m src.data.separar_teste  # atualiza os grupos do teste congelado (os ids vêm do git)
+
+# Professor (Fases 2 e 3)
+python -m src.teacher.traduzir && python -m src.teacher.traduzir --teste
+python -m src.teacher.gerar && python -m src.teacher.filtrar
+python -m src.teacher.anotar && python -m src.teacher.anotar --teste
+python -m src.teacher.filtrar
+
+# Splits e exportação (Fase 4)
+python -m src.splits && python -m src.exportar && python -m src.vazamento
+
+# Treino, previsões e avaliação (Fases 5 a 8)
+pip install -r requirements-treino.txt
+python -m src.baseline
+python -m src.train --aluno <apelido>                      # apelidos em CFG.alunos
+python -m src.prever --nome <apelido>_lora --modelo <nome no servidor> --url <API>
+python -m src.juiz --url <API> outputs/previsoes/*.jsonl
+python -m src.relatorio                                    # reports/resultados.md
 
 # Testes
 python -m pytest -q
@@ -150,13 +175,17 @@ phishexplain/
 ├── data/          # bases brutas e intermediárias (fora do git)
 ├── models/        # modelos GGUF locais (fora do git)
 ├── outputs/       # adaptadores e previsões (fora do git)
+├── docker/        # imagens da DGX Spark
+├── notebooks/     # spark.ipynb: rodada completa na Spark
 ├── reports/       # tabelas e análises
-├── scripts/       # utilitários (ex.: subir o professor de desenvolvimento)
-├── splits/        # ids do teste congelado
+├── scripts/       # professor de desenvolvimento, imagens da Spark, gerador do notebook
+├── splits/        # ids do teste congelado (e de treino/validação, depois da rodada)
 ├── src/
 │   ├── config.py  # perfis pc e spark, caminhos, modelos, semente
 │   ├── schema.py  # contrato de saída
-│   ├── data/      # download, normalização, limpeza, grupos e teste
-│   └── teacher/   # cliente e prompts do professor
+│   ├── dados.py   # fonte única dos e-mails
+│   ├── data/      # Fase 1: download, normalização, limpeza, grupos e teste
+│   ├── teacher/   # professor: tradução, anotação, sintéticos
+│   └── *.py       # splits, exportação, treino, previsão, avaliação, juiz, relatório
 └── tests/
 ```

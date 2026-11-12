@@ -1,6 +1,5 @@
-# Dados: grandes e com licenças variadas; vão para a Spark por rsync, não pelo git
+# Dados: licenças variadas (a base PT-BR não tem licença); cada um baixa com src/data/baixar.py
 /data/
-
 # Adaptadores treinados e previsões dos modelos
 /outputs/
 
@@ -18,5 +17,6 @@ __pycache__/
 # Inventário bruto da Fase 1
 reports/inventario_raw.txt
 
-# Cache de kernels compilados pela Unsloth
+# Cache de kernels compilados pela Unsloth e HOME dos containers na Spark
 unsloth_compiled_cache/
+/.home/

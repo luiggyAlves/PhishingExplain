@@ -36,7 +36,7 @@ O usuário está aprendendo com o projeto. Siga estas regras:
 - **Scripts rodam como módulos**, da raiz: `python -m src.teacher.prompts`. Todo script executável termina com `if __name__ == "__main__":`.
 - **Nada de caminhos, nomes de modelos ou tamanhos escritos à mão.** Use `src/config.py` (`CFG`, `RAIZ`, `DADOS_*`, `SEMENTE`, `MAX_CHARS_EMAIL`) e `src/dados.py`.
 - **Scripts idempotentes:** rodar duas vezes dá o mesmo resultado; o que já foi feito é pulado ou retomado.
-- **Commit ao fim de cada passo**, com mensagem em português, direto na `main`, **sem linhas de coautoria do Claude**. Nunca commitar `data/`, `models/`, `outputs/` nem `reports/inventario_raw.txt` (o `.gitignore` ancora esses caminhos na raiz).
+- **Commit ao fim de cada passo**, com mensagem em português, direto na `main`, **sem linhas de coautoria do Claude**. Nunca commitar `data/`, `models/`, `outputs/` nem `reports/inventario_raw.txt` (o `.gitignore` ancora esses caminhos na raiz). `data/` fica fora por licença: o repositório das bases PT-BR não tem licença e não pode ser redistribuído; quem clona reconstrói tudo com a Fase 1 (o notebook faz isso).
 - **Testes com pytest** em `tests/`, rodados com `python -m pytest -q` no ambiente conda `phishexplain`.
 
 ## 3. Ambientes
@@ -90,7 +90,7 @@ phishexplain/
 └── tests/                         # test_schema.py, test_validar.py, test_evaluate.py
 ```
 
-### Dados (em `data/interim/`, fora do git)
+### Dados (em `data/`, fora do git; o repositório no GitHub é público)
 
 - **`emails_agrupados.parquet` é a tabela mestre.** Leia sempre por `src/dados.py`.
 - Colunas: `id`, `fonte`, `grupo`, `autoria` (`humano`/`llm`), `idioma`, `traduzido`, `remetente`, `assunto`, `corpo`, `urls`, `anexos`, `rotulo` (`phishing`/`legitimo`/`spam`), `rotulo_original`, `motivacao`, `grupo_original`.
@@ -139,7 +139,7 @@ Os ids são fixos. Ao refazer a 1.3, `python -m src.data.separar_teste` só atua
 
 - **Valores ausentes em colunas de texto do pandas chegam como `NaN` (float), não `None`.** Teste `isinstance(v, str)`. Para JSON, use `traduzir.como_itens()` (troca NaN por None).
 - **Espaços:** até 2026-11-11 o `limpar.py` apagava todos os espaços, o que quebrava o MinHash por palavras. Ao mexer na limpeza, imprima um e-mail antes de seguir.
-- **`.gitignore`:** `data/` sem barra inicial ignorava `src/data/`. Hoje é `/data/`.
+- **`.gitignore`:** padrões sem barra inicial (`data/`) também casam com subpastas como `src/data/`; ancore na raiz com `/`.
 - **Unicode:** normalize para NFC antes de comparar textos.
 - **`if __name__ == "__main__":`** com dois sublinhados de cada lado.
 - **Strings adjacentes em Python são coladas sem espaço.**
@@ -148,7 +148,8 @@ Os ids são fixos. Ao refazer a 1.3, `python -m src.data.separar_teste` só atua
 - **`pkill -f padrão`** casa com o próprio shell que roda o comando; use `pkill -x llama-server`.
 - **Modelos Qwen3.5 pensam por padrão:** toda chamada sem saída do aluno manda `chat_template_kwargs={"enable_thinking": False}` (senão os tokens vão para o raciocínio e a resposta volta vazia).
 - **`causal_conv1d` ausente** deixa o Qwen3.5 mais lento no treino (cai na implementação de referência); opcional instalar.
-- **Na Spark:** arquivos criados pelo container pertencem ao root (`sudo chown -R $USER:$USER ~/phishexplain`); crie `~/.cache/huggingface` antes do `docker run`.
+- **Na Spark:** containers como root deixam arquivos com dono root no repositório e no cache do Hugging Face; por isso `servidor.py` usa `--user`. Se o cache já tiver pastas de root, `sudo chown -R $USER:$USER ~/.cache/huggingface`.
+- **Saída de subprocessos no Jupyter** não aparece sozinha; `servidor.executar` repassa linha a linha.
 
 ## 7. Plano
 
@@ -182,14 +183,14 @@ Os ids são fixos. Ao refazer a 1.3, `python -m src.data.separar_teste` só atua
 
 ### Fase 6 — Migração para a Spark ✅ (código; execução na Spark pelo usuário)
 
-- **6.1** `scripts/spark_construir.sh`: imagem `unsloth-dgx-spark` (Dockerfile oficial) e `phishexplain-unsloth:0.1` (+ projeto, Jupyter, SDK do Docker, com o torch da NGC travado).
-- **6.2** `scripts/spark_container.sh` + `python -m src.ambiente`.
-- **6.3** `git clone` + `rsync` de `data/interim/` (basta a tabela mestre; o notebook apaga as saídas do professor de desenvolvimento).
-- **6.4** `src/servidor.py`: o vLLM roda num container irmão (a imagem da Unsloth não traz vLLM), pela imagem `PHISH_VLLM_IMAGEM` (padrão `nvcr.io/nvidia/vllm:26.09-py3`; a 26.01 traz vLLM 0.13 e não serve). Um modelo por vez; parar antes de treinar.
+- **6.1** `scripts/spark_construir.sh`: imagem `unsloth-dgx-spark` (Dockerfile oficial) e `phishexplain-unsloth:0.1` (+ projeto e matplotlib, com o torch da NGC travado).
+- **6.2** `python -m src.ambiente` (o notebook roda dentro da imagem); `scripts/spark_container.sh` abre um terminal na imagem para depurar.
+- **6.3** `git clone`; o notebook reconstrói os dados com a Fase 1 (`baixar`, `normalizar`, `limpar`, `agrupar`, `separar_teste`), que é determinística. O `splits/teste.csv` no git garante o mesmo teste.
+- **6.4** `src/servidor.py` roda **no host**, só com a biblioteca padrão: `python()`/`modulo()` executam cada passo na imagem do projeto, e `subir()`/`parar()` controlam o vLLM num container próprio (a imagem da Unsloth não traz vLLM), pela imagem `PHISH_VLLM_IMAGEM` (padrão `nvcr.io/nvidia/vllm:26.09-py3`; a 26.01 traz vLLM 0.13 e não serve). Um modelo por vez; parar antes de treinar. Todos os containers rodam com o usuário do host (`--user`, `USER=phish`, `HOME=.home/`, `HF_HOME=/hf`), então nada fica com dono root.
 
 ### Fases 7 e 8 — Rodada completa e resultados (notebook)
 
-`notebooks/spark.ipynb`, pedido do usuário em 2026-11-12: vazão do professor e estimativa de tempo; tradução, sintéticos e anotação; splits, exportação, vazamento; professor, baseline e alunos em zero-shot; treinos (Gemma 4 E2B, Qwen3.5-4B, S5-nano); previsões com LoRA; juiz `mistralai/Mistral-Small-3.2-24B-Instruct-2506` (outra família, cego); `reports/resultados.md` com métricas por recorte, McNemar das perguntas de pesquisa, recall por campanha do RNP, notas do juiz, erros por fonte e marcadores do treino.
+`notebooks/spark.ipynb` (gerado por `scripts/montar_notebook.py`; edite o script e gere de novo), pedido do usuário em 2026-11-12. Roda no host da Spark e faz tudo sozinho: clona o repositório, constrói as imagens, sobe e desliga cada LLM; vazão do professor e estimativa de tempo; tradução, sintéticos e anotação; splits, exportação, vazamento; professor, baseline e alunos em zero-shot; treinos (Gemma 4 E2B, Qwen3.5-4B, S5-nano); previsões com LoRA; juiz `mistralai/Mistral-Small-3.2-24B-Instruct-2506` (outra família, cego); `reports/resultados.md` com métricas por recorte, McNemar das perguntas de pesquisa, recall por campanha do RNP, notas do juiz, erros por fonte e marcadores do treino.
 
 ### Fase 9 — Opcional
 
@@ -197,7 +198,7 @@ Exportar o melhor modelo para GGUF.
 
 ## 8. Próximo passo
 
-**Rodar o notebook na Spark** (passos de preparo na primeira célula). Depois: revisar `data/interim/revisao_sinteticos.md` (50 sintéticos), `reports/vazamento.csv` (topo) e dar notas aos 30 casos de `reports/calibracao_juiz.md`; commitar `splits/treino.csv`, `splits/validacao.csv` e `reports/`; preencher resultados e limitações do `README.md`.
+**Rodar o notebook na Spark** (`Run All` no host; depende de o repositório estar no GitHub, porque o notebook clona de lá). Depois: revisar `data/interim/revisao_sinteticos.md` (50 sintéticos), `reports/vazamento.csv` (topo) e dar notas aos 30 casos de `reports/calibracao_juiz.md`; commitar `splits/treino.csv`, `splits/validacao.csv` e `reports/`; preencher resultados e limitações do `README.md`.
 
 Pontos a confirmar na primeira execução na Spark: a tag da imagem do vLLM (precisa de vLLM >= 0.17 com Qwen3.5); se o vLLM aceita os adaptadores LoRA dos alunos multimodais com `--language-model-only`; o template do Gemma 4 no `train.prompt_completion` (se não renderizar como prefixo, cai no `eos_token`).
 

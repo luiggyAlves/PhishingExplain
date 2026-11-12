@@ -17,3 +17,6 @@ __pycache__/
 
 # Inventário bruto da Fase 1
 reports/inventario_raw.txt
+
+# Cache de kernels compilados pela Unsloth
+unsloth_compiled_cache/

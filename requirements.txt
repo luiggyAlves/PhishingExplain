@@ -15,6 +15,9 @@ scikit-learn
 # Detecção de quase-duplicatas
 datasketch
 
+# Conserto de codificação quebrada (mojibake)
+ftfy
+
 # Utilidades
 tqdm
 pytest

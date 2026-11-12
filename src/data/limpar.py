@@ -6,6 +6,7 @@
 
 import re 
 import unicodedata
+import ftfy
 import pandas as pd 
 from src.config import DADOS_INTERIM
 
@@ -26,7 +27,7 @@ LINK_REMOVIDO = re.compile(r"\[link removed\]", re.IGNORECASE)
 def limpar_texto(texto):
     if not isinstance(texto, str): # Se o texto não for uma string nem faz sentido continuar, o formato já está errado
         return None
-    texto = unicodedata.normalize("NFC", texto)
+    texto = ftfy.fix_text(texto, normalization="NFC")  # conserta mojibake ("Ã©" -> "é", "Â®" -> "®") e já normaliza em NFC
     texto = texto.replace("\r\n", "\n").replace("\r", "\n")
     texto = INVISIVEIS.sub("", texto)
     texto = ESPACOS.sub(" ", texto)  # colapsa espaços repetidos em um só (com "" os e-mails perdiam todos os espaços)

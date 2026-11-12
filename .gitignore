@@ -1,11 +1,11 @@
 # Dados: grandes e com licenças variadas; vão para a Spark por rsync, não pelo git
-data/
+/data/
 
 # Adaptadores treinados e previsões dos modelos
-outputs/
+/outputs/
 
 # Modelos baixados para rodar localmente (o professor de desenvolvimento)
-models/
+/models/
 
 # Segredos e configurações locais
 .env

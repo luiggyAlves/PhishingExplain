@@ -51,7 +51,35 @@ def marcadores() -> pd.DataFrame:
 
 
 def md(df: pd.DataFrame) -> str:
-    return df.to_markdown(floatfmt=".3f") if len(df) else "_(sem dados)_"
+    if not len(df):
+        return "_(sem dados)_"
+    return (df if isinstance(df.index, pd.RangeIndex) else df.reset_index()).to_markdown(index=False, floatfmt=".3f")
+
+
+def grafico(metricas: pd.DataFrame) -> None:
+    """F1 com IC de 95% por modelo, um painel por recorte (reports/f1.png). No pt_nativo só há golpes: F1 ~ recall."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    m = metricas.reset_index()
+    recortes, modelos = list(m.recorte.unique()), sorted(m.modelo.unique())
+    fig, eixos = plt.subplots(1, len(recortes), figsize=(4 * len(recortes), 0.45 * len(modelos) + 1.2), sharey=True)
+    for ax, recorte in zip(eixos, recortes):
+        d = m[m.recorte == recorte].set_index("modelo").reindex(modelos)
+        ic = d.f1_ic.str.split("–", expand=True).astype(float)
+        erro = [(d.f1 - ic[0]).clip(lower=0), (ic[1] - d.f1).clip(lower=0)]
+        ax.barh(modelos, d.f1, height=0.6, color="#257de0", xerr=erro, error_kw={"ecolor": "#666666", "lw": 1, "capsize": 2})
+        for y, (v, fim) in enumerate(zip(d.f1, ic[1].fillna(d.f1))):  # o rótulo fica depois do fim do IC
+            ax.text(fim + 0.02, y, f"{v:.2f}", va="center", fontsize=8, color="#191919")
+        ax.set(title=recorte, xlim=(0, 1.2), xticks=[0, 0.25, 0.5, 0.75, 1], xlabel="F1 (phishing)")
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="x", color="#e5e5e5", lw=0.8)
+        ax.set_axisbelow(True)
+    eixos[0].invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(RELATORIOS / "f1.png", dpi=150)
+    plt.close(fig)
 
 
 def main() -> dict[str, pd.DataFrame]:
@@ -66,10 +94,12 @@ def main() -> dict[str, pd.DataFrame]:
         "marcadores": ("Marcadores no treino", marcadores()),
     }
     RELATORIOS.mkdir(exist_ok=True)
-    texto = "# Resultados do PhishExplain\n\n" + "\n\n".join(f"## {t}\n\n{md(d)}" for t, d in tabelas.values())
+    texto = "# Resultados do PhishExplain\n\n![F1 por modelo e recorte](f1.png)\n\n" + "\n\n".join(f"## {t}\n\n{md(d)}" for t, d in tabelas.values())
     (RELATORIOS / "resultados.md").write_text(texto + "\n", encoding="utf-8")
     for arquivo, (_, d) in tabelas.items():
         d.to_csv(RELATORIOS / f"{arquivo}.csv")
+    if arq:
+        grafico(tabelas["metricas"][1])
     print(f"Relatório em {RELATORIOS / 'resultados.md'}")
     return dict(tabelas.values())
 

@@ -7,7 +7,7 @@ CELULAS = []
 md = lambda t: CELULAS.append(("markdown", t.strip("\n")))
 py = lambda t: CELULAS.append(("code", t.strip("\n")))
 
-md("""é o spark
+md("""
 # PhishExplain na DGX Spark: rodada completa
 
 Este notebook roda **no host da DGX Spark** (por exemplo, no JupyterLab do DGX Dashboard) e faz tudo sozinho:
@@ -19,7 +19,8 @@ Este notebook roda **no host da DGX Spark** (por exemplo, no JupyterLab do DGX D
 5. roda o professor, o baseline e os três alunos em zero-shot no teste (7.2);
 6. treina os três alunos com LoRA e roda as previsões com os adaptadores (7.3 a 7.5);
 7. julga as explicações com um modelo de outra família (8.2);
-8. mostra todas as tabelas de resultados (8.1 e 8.3).
+8. mostra todas as tabelas de resultados (8.1 e 8.3);
+9. opcional: exporta o melhor aluno para GGUF (Fase 9).
 
 **Basta `Run All`.** Precisa só de Docker com GPU (seu usuário no grupo `docker`), internet e cerca de 250 GB livres
 (imagens + modelos). Nenhum modelo exige aceite de licença; um token do Hugging Face é opcional (baixa mais rápido).
@@ -33,17 +34,19 @@ py("""
 from pathlib import Path
 
 REPO_URL = "https://github.com/luiggyAlves/PhishingExplain.git"
+RAMO = "main"
 REPO = Path.home() / "phishexplain"            # onde o repositório fica na Spark
 HF_TOKEN = ""                                  # opcional; vazio = usa ~/.cache/huggingface/token, se existir
 VLLM_IMAGEM = "nvcr.io/nvidia/vllm:26.09-py3"  # precisa de vLLM >= 0.17; alternativa: "vllm/vllm-openai:cu130-nightly"
 PROFESSOR = "Qwen/Qwen3.5-27B"                 # plano B, se a estimativa passar de uma noite: "Qwen/Qwen3.5-35B-A3B"
 ALUNOS = ["gemma4-e2b", "qwen35-4b", "s5-nano"]  # ordem do treino: o menor primeiro, para achar bugs cedo
+EXPORTAR_GGUF = False                          # Fase 9 (opcional): GGUF Q8_0 do melhor aluno, para o llama.cpp
 """)
 
 md("## Preparo: repositório, Docker e imagens")
 
 py("""
-import csv, os, platform, shutil, subprocess, sys, time
+import csv, json, os, platform, shutil, subprocess, sys, time
 from IPython.display import Image, Markdown, display
 
 assert platform.machine() == "aarch64", "este notebook é para a DGX Spark"
@@ -52,10 +55,11 @@ r = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture
 assert r.returncode == 0, "sem acesso ao Docker: rode 'sudo usermod -aG docker $USER' e entre de novo\\n" + r.stderr
 
 if not (REPO / ".git").exists():
-    subprocess.run(["git", "clone", REPO_URL, str(REPO)], check=True)
+    subprocess.run(["git", "clone", "--branch", RAMO, REPO_URL, str(REPO)], check=True)
 else:
-    r = subprocess.run(["git", "-C", str(REPO), "pull", "--ff-only"], capture_output=True, text=True)
-    print(r.stdout or r.stderr)
+    for cmd in (["checkout", RAMO], ["pull", "--ff-only", "origin", RAMO]):
+        r = subprocess.run(["git", "-C", str(REPO), *cmd], capture_output=True, text=True)
+        print(r.stdout or r.stderr, end="")
 
 token = Path.home() / ".cache" / "huggingface" / "token"
 os.environ["HF_TOKEN"] = HF_TOKEN or (token.read_text().strip() if token.exists() else "")
@@ -76,6 +80,7 @@ print("Repositório:", REPO, "| commit:", subprocess.run(["git", "-C", str(REPO)
 py("""
 executar(["./scripts/spark_construir.sh"])   # na primeira vez compila triton e xformers (demora); depois usa o cache
 executar(["docker", "pull", VLLM_IMAGEM])
+servidor.checar_vllm()                       # versão >= 0.17 e flags que a imagem conhece
 modulo("src.ambiente")                       # 6.2: aarch64, CUDA 13, GB10, cc 12.1, bf16, transformers >= 5.2
 """)
 
@@ -104,13 +109,18 @@ modulo("src.teacher.cliente")
 
 md("""
 Traduz uma amostra de 64 e-mails (que já conta para a rodada) e estima o tempo de toda a geração do professor.
-Se passar de uma noite, troque `PROFESSOR` pelo plano B na configuração e rode de novo a partir da célula do professor.
+Se passar de uma noite, troque `PROFESSOR` pelo plano B na configuração, apague `data/interim/traducoes.jsonl`
+(para medir de novo) e rode de novo a partir da célula do professor.
 """)
 
 py('''
-inicio = time.time()
-modulo("src.teacher.traduzir", PHISH_LIMITE=64)
-python("-c", """
+traducoes = REPO / "data" / "interim" / "traducoes.jsonl"
+if traducoes.exists():  # numa segunda execução as 64 já estão feitas e o tempo medido não diz nada
+    print("Tradução já começou; estimativa pulada")
+else:
+    inicio = time.time()
+    modulo("src.teacher.traduzir", PHISH_LIMITE=64)
+    python("-c", """
 import os
 from src.config import SINTETICOS_META
 from src.teacher import anotar, traduzir
@@ -160,8 +170,22 @@ with open(REPO / "reports" / "vazamento.csv", encoding="utf-8") as f:
 md("## Baseline e alunos em zero-shot")
 
 py("""
+N_TESTE = sum(1 for _ in (REPO / "data" / "processed" / "test.jsonl").open(encoding="utf-8"))
+
+
+def textos(nome: str) -> dict:
+    \"\"\"Respostas já gravadas de um modelo (o prever só grava os pedidos que deram certo).\"\"\"
+    arq = REPO / "outputs" / "previsoes" / f"{nome}.jsonl"
+    return {(d := json.loads(l))["id"]: d["texto"] for l in arq.open(encoding="utf-8")} if arq.exists() else {}
+
+
+completo = lambda nome: len(textos(nome)) >= 0.95 * N_TESTE
+
 modulo("src.baseline")
 for aluno in ALUNOS:
+    if completo(f"{aluno}_zeroshot"):
+        print(aluno, "zero-shot já feito")
+        continue
     repo = CFG.alunos[aluno]
     url = subir(repo, servidor.ALUNO)
     modulo("src.prever", "--nome", f"{aluno}_zeroshot", "--modelo", repo, "--url", url)
@@ -194,13 +218,38 @@ for aluno in ALUNOS:
     display(Image(str(REPO / "outputs" / aluno / "loss.png")))
 ''')
 
-md("## Previsões com os adaptadores")
+md("""
+## Previsões com os adaptadores
+
+Primeiro tenta servir o adaptador LoRA direto no vLLM. Se o vLLM recusar o adaptador (alunos multimodais são o caso
+menos testado), se os pedidos falharem ou se as respostas saírem iguais às do zero-shot (adaptador ignorado), o plano B
+funde o adaptador ao modelo base (`src.fundir`) e serve o modelo fundido, que dá as mesmas respostas.
+""")
 
 py("""
+def lora_ok(aluno: str) -> bool:
+    lora, zs = textos(f"{aluno}_lora"), textos(f"{aluno}_zeroshot")
+    return completo(f"{aluno}_lora") and sum(t == zs.get(i) for i, t in lora.items()) < 0.5 * len(lora)
+
+
 for aluno in ALUNOS:
-    repo = CFG.alunos[aluno]
-    url = subir(repo, servidor.ALUNO, lora={f"{aluno}-lora": f"outputs/{aluno}"})
-    modulo("src.prever", "--nome", f"{aluno}_lora", "--modelo", f"{aluno}-lora", "--url", url)
+    nome, servido = f"{aluno}_lora", f"{aluno}-lora"
+    if lora_ok(aluno):
+        print(aluno, "LoRA já feito")
+        continue
+    try:
+        url = subir(CFG.alunos[aluno], servidor.ALUNO, lora={servido: f"outputs/{aluno}"})
+        modulo("src.prever", "--nome", nome, "--modelo", servido, "--url", url)
+    except RuntimeError as erro:
+        print(erro)
+    if not lora_ok(aluno):
+        print(f"{aluno}: o adaptador não funcionou no vLLM; plano B com o modelo fundido")
+        parar()
+        (REPO / "outputs" / "previsoes" / f"{nome}.jsonl").unlink(missing_ok=True)
+        modulo("src.fundir", "--aluno", aluno)
+        url = subir(f"/repo/outputs/{aluno}/fundido", servidor.ALUNO, nome=servido)
+        modulo("src.prever", "--nome", nome, "--modelo", servido, "--url", url)
+    print(aluno, "ok" if lora_ok(aluno) else "AINDA COM PROBLEMA: veja os erros acima")
 parar()
 """)
 
@@ -223,7 +272,28 @@ md("## 8.1 e 8.3: resultados")
 
 py("""
 modulo("src.relatorio")
-display(Markdown((REPO / "reports" / "resultados.md").read_text(encoding="utf-8")))
+display(Image(str(REPO / "reports" / "f1.png")))
+display(Markdown((REPO / "reports" / "resultados.md").read_text(encoding="utf-8").replace("![F1 por modelo e recorte](f1.png)", "")))
+""")
+
+md("""
+## Fase 9 (opcional): GGUF do melhor aluno
+
+Com `EXPORTAR_GGUF = True`, funde o adaptador do aluno com maior F1 total e converte para GGUF Q8_0 com o script do
+llama.cpp (clonado em `.home/llama.cpp`), para rodar no PC com `llama-server`. O arquivo fica em `outputs/<aluno>/`.
+""")
+
+py("""
+if EXPORTAR_GGUF:
+    with open(REPO / "reports" / "metricas.csv", encoding="utf-8") as f:
+        lora = [l for l in csv.DictReader(f) if l["modelo"].endswith("_lora") and l["recorte"] == "total"]
+    melhor = max(lora, key=lambda l: float(l["f1"]))["modelo"].removesuffix("_lora")
+    print("Melhor aluno:", melhor)
+    modulo("src.fundir", "--aluno", melhor)
+    if not (REPO / ".home" / "llama.cpp").exists():
+        executar(["git", "clone", "--depth", "1", "https://github.com/ggml-org/llama.cpp", str(REPO / ".home" / "llama.cpp")])
+    python(".home/llama.cpp/convert_hf_to_gguf.py", f"outputs/{melhor}/fundido", "--outtype", "q8_0",
+           "--outfile", f"outputs/{melhor}/{melhor}-q8_0.gguf")
 """)
 
 md("""
@@ -235,13 +305,13 @@ md("""
 """)
 
 
-def celula(tipo, texto):
-    base = {"cell_type": tipo, "metadata": {}, "source": texto.splitlines(keepends=True)}
+def celula(i, tipo, texto):
+    base = {"cell_type": tipo, "id": f"celula-{i:02d}", "metadata": {}, "source": texto.splitlines(keepends=True)}
     return base | ({"execution_count": None, "outputs": []} if tipo == "code" else {})
 
 
 if __name__ == "__main__":
-    nb = {"cells": [celula(*c) for c in CELULAS], "nbformat": 4, "nbformat_minor": 5,
+    nb = {"cells": [celula(i, *c) for i, c in enumerate(CELULAS)], "nbformat": 4, "nbformat_minor": 5,
           "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
                        "language_info": {"name": "python"}}}
     destino = Path(__file__).resolve().parent.parent / "notebooks" / "spark.ipynb"

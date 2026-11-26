@@ -4,6 +4,7 @@
 # Os containers rodam com o usuário do host, então nada no repositório nem no cache do Hugging Face fica com dono root.
 
 import os
+import re
 import subprocess
 import time
 import urllib.request
@@ -16,7 +17,7 @@ HF = Path(os.environ.get("PHISH_HF", Path.home() / ".cache" / "huggingface"))
 NOME = "phishexplain-vllm"
 PORTA = 8000
 PROFESSOR = ["--reasoning-parser", "qwen3", "--language-model-only", "--max-model-len", "32768",
-             "--kv-cache-dtype", "fp8", "--gpu-memory-utilization", "0.8", "--max-num-seqs", "32"]
+             "--gpu-memory-utilization", "0.8", "--max-num-seqs", "32"]
 ALUNO = ["--language-model-only", "--max-model-len", "8192", "--gpu-memory-utilization", "0.6", "--max-num-seqs", "64"]
 JUIZ = ["--max-model-len", "16384", "--gpu-memory-utilization", "0.8", "--max-num-seqs", "32",
         "--tokenizer-mode", "mistral", "--config-format", "mistral", "--load-format", "mistral"]
@@ -51,6 +52,22 @@ def python(*args: str, **env) -> None:
 
 def modulo(nome: str, *args: str, **env) -> None:
     python("-m", nome, *args, **env)
+
+
+def checar_vllm() -> None:
+    """Confere a versão do vLLM da imagem (>= 0.17 para Qwen3.5) e tira das listas de flags as que ela não conhece."""
+    r = subprocess.run(["docker", "run", "--rm", "--entrypoint", "bash", VLLM_IMAGEM, "-c",
+                        "python3 -c 'import vllm; print(\"VERSAO\", vllm.__version__)'; vllm serve --help=all"],
+                       capture_output=True, text=True)
+    versao = re.search(r"VERSAO ((\d+)\.(\d+)\S*)", r.stdout)  # marcado: o vLLM também loga no stdout
+    if not versao or (int(versao[2]), int(versao[3])) < (0, 17):
+        raise RuntimeError(f"{VLLM_IMAGEM}: vLLM {versao and versao[1]}; o Qwen3.5 precisa de >= 0.17 (troque VLLM_IMAGEM)\n"
+                           + r.stderr[-2000:])
+    print("vLLM", versao[1])
+    if "--language-model-only" not in r.stdout:  # sem ela, o vLLM carrega também o codificador de imagem (só gasta memória)
+        for flags in (PROFESSOR, ALUNO, JUIZ):
+            flags[:] = [f for f in flags if f != "--language-model-only"]
+        print("AVISO: esta versão do vLLM não tem --language-model-only; servindo os modelos completos")
 
 
 def parar() -> None:

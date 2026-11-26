@@ -70,21 +70,21 @@ Todas as fontes foram convertidas para um esquema único e depois limpas:
 | Etapa | E-mails |
 | --- | --- |
 | Entrada | 28.184 |
-| Removidos (idioma, tamanho, malformados, duplicatas) | 780 |
-| Após o tratamento | 27.404 |
+| Removidos (idioma, tamanho, malformados, duplicatas) | 782 |
+| Após o tratamento | 27.402 |
 
 O spam (cerca de um terço do PhishFuzzer) fica nos dados intermediários, mas fora desta versão do experimento: a tarefa é binária, phishing ou legítimo.
 
 ### 3. Divisão treino-teste
 
-O teste foi separado e congelado em [`splits/teste.csv`](splits/teste.csv) antes de qualquer contato do professor com os e-mails. Ele tem 400 e-mails escritos por humanos, em dois recortes:
+O teste foi separado e congelado em [`splits/teste.csv`](splits/teste.csv) antes de qualquer contato do professor com os e-mails. Ele tem 399 e-mails escritos por humanos, em dois recortes:
 
 | Recorte | Phishing | Legítimo | Mede |
 | --- | --- | --- | --- |
 | Português nativo (RNP e sementes em português) | 100 | 0 | Recall em golpes reais |
-| Traduzido (sementes em inglês, sorteadas por grupo) | 150 | 150 | Precisão e falso positivo |
+| Traduzido (sementes em inglês, sorteadas por grupo) | 150 | 149 | Precisão e falso positivo |
 
-Os 1.866 e-mails que pertencem aos mesmos grupos do teste (variantes das sementes) ficam fora do treino. O restante é dividido em treino e validação por grupo.
+Os 2.119 e-mails que pertencem aos mesmos grupos do teste (variantes das sementes) ficam fora do treino. O restante é dividido em treino e validação por grupo.
 
 ### 4. Geração das explicações (destilação)
 
@@ -107,7 +107,7 @@ Baselines: Os três modelos em zero-shot e o próprio professor.
 
 ## Resultados
 
-*Em andamento.* A tabela abaixo será preenchida ao fim do experimento.
+*Em andamento.* A tabela abaixo será preenchida ao fim do experimento, a partir de `reports/resultados.md` (gerado pelo notebook da Spark, com o gráfico `reports/f1.png`).
 
 | Modelo | Versão | F1 phishing | Falso positivo | JSON válido | Ancoragem |
 | --- | --- | --- | --- | --- | --- |
@@ -128,7 +128,7 @@ Os dados não estão no repositório: as bases têm licenças variadas (a base P
 
 ### Na NVIDIA DGX Spark (rodada completa)
 
-Abra `notebooks/spark.ipynb` no JupyterLab do host e rode tudo (`Run All`). O notebook clona este repositório, constrói as imagens Docker, reconstrói os dados, sobe cada LLM no vLLM (professor, alunos e juiz), traduz, gera e anota os dados, treina os três alunos com LoRA, avalia e mostra as tabelas de resultados. Precisa de Docker com GPU e de cerca de 250 GB livres; nenhum modelo exige aceite de licença.
+Abra `notebooks/spark.ipynb` no JupyterLab do host e rode tudo (`Run All`). O notebook clona este repositório, constrói as imagens Docker, reconstrói os dados, sobe cada LLM no vLLM (professor, alunos e juiz), traduz, gera e anota os dados, treina os três alunos com LoRA, avalia e mostra as tabelas de resultados. Precisa de Docker com GPU e de cerca de 250 GB livres; nenhum modelo exige aceite de licença. O único lugar para editar é a célula de configuração (repositório, ramo, imagem do vLLM, professor e a exportação opcional para GGUF). Se cair no meio, rode de novo: tudo que já foi feito é pulado. Se o vLLM não aceitar o adaptador LoRA de algum aluno, o notebook funde o adaptador ao modelo base (`src.fundir`) e serve o modelo fundido.
 
 ### Em outra máquina (passo a passo)
 
@@ -162,7 +162,8 @@ python -m src.baseline
 python -m src.train --aluno <apelido>                      # apelidos em CFG.alunos
 python -m src.prever --nome <apelido>_lora --modelo <nome no servidor> --url <API>
 python -m src.juiz --url <API> outputs/previsoes/*.jsonl
-python -m src.relatorio                                    # reports/resultados.md
+python -m src.relatorio                                    # reports/resultados.md e reports/f1.png
+python -m src.fundir --aluno <apelido>                     # opcional: adaptador fundido ao modelo base (vLLM, GGUF)
 
 # Testes
 python -m pytest -q

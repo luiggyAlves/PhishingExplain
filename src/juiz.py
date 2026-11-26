@@ -3,11 +3,12 @@
 # Uso: python -m src.juiz --url http://localhost:8000/v1 outputs/previsoes/a.jsonl outputs/previsoes/b.jsonl ...
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
 import pandas as pd
-from openai import OpenAI
+from openai import APIStatusError, OpenAI
 from pydantic import BaseModel, Field
 
 from src.config import DADOS_PROCESSED, JUIZ_MODELO, RELATORIOS, SAIDAS, SEMENTE
@@ -38,13 +39,17 @@ class Notas(BaseModel):
 def avaliador(cliente: OpenAI, modelo: str):
     def avaliar(c: dict) -> dict:
         conteudo = f"Classificação correta: {c['rotulo']}\n\n{c['email']}\n\nResposta do detector:\n{c['resposta']}"
-        r = cliente.chat.completions.create(
-            model=modelo, temperature=0.0, max_tokens=300,
-            messages=[{"role": "system", "content": SISTEMA}, {"role": "user", "content": conteudo}],
-            response_format={"type": "json_schema", "json_schema": {"name": "Notas", "schema": Notas.model_json_schema()}},
-            extra_body={"chat_template_kwargs": {"enable_thinking": False}},  # juízes com raciocínio gastariam os tokens pensando
-        )
-        return Notas.model_validate_json(r.choices[0].message.content).model_dump() | {"modelo": c["modelo"]}
+        pedido = dict(model=modelo, temperature=0.0, max_tokens=300,
+                      messages=[{"role": "system", "content": SISTEMA}, {"role": "user", "content": conteudo}])
+        try:
+            r = cliente.chat.completions.create(
+                **pedido,
+                response_format={"type": "json_schema", "json_schema": {"name": "Notas", "schema": Notas.model_json_schema()}},
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},  # juízes com raciocínio gastariam os tokens pensando
+            )
+        except APIStatusError:  # servidor que recusa saída estruturada ou chat_template_kwargs (ex.: tokenizador da Mistral)
+            r = cliente.chat.completions.create(**pedido)
+        return Notas.model_validate_json(limpar(r.choices[0].message.content)).model_dump() | {"modelo": c["modelo"]}
     return avaliar
 
 
@@ -57,7 +62,8 @@ def casos(arquivos: list[Path]) -> list[dict]:
             texto = limpar(p.get("texto", ""))
             if p["id"] in teste and '"explicacao"' in texto:
                 t = teste[p["id"]]
-                saida.append({"id": f"{arq.stem}|{p['id']}", "modelo": arq.stem, "rotulo": t["rotulo"],
+                chave = hashlib.sha1(texto.encode()).hexdigest()[:10]  # previsões refeitas pedem nota nova
+                saida.append({"id": f"{arq.stem}|{p['id']}|{chave}", "modelo": arq.stem, "rotulo": t["rotulo"],
                               "email": t["messages"][1]["content"], "resposta": texto})
     return saida
 
@@ -87,6 +93,8 @@ if __name__ == "__main__":
     args = ap.parse_args()
     NOTAS.parent.mkdir(parents=True, exist_ok=True)
     lista = casos(args.previsoes)
+    atuais = {c["id"] for c in lista}  # descarta notas de respostas que não existem mais
+    NOTAS.write_text("".join(json.dumps(n, ensure_ascii=False) + "\n" for n in ler(NOTAS) if n["id"] in atuais), encoding="utf-8")
     rodar(lista, avaliador(OpenAI(base_url=args.url, api_key="sem-chave", timeout=600), args.modelo),
           NOTAS, NOTAS.with_name("falhas.jsonl"))
     calibracao(lista)

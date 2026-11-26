@@ -86,7 +86,8 @@ phishexplain/
 │   ├── splits.py, exportar.py, vazamento.py, prompts_aluno.py   # Fase 4
 │   ├── evaluate.py, baseline.py, train.py, prever.py             # Fase 5
 │   ├── ambiente.py, servidor.py                                  # Fase 6 (checagem e vLLM em container irmão)
-│   └── juiz.py, relatorio.py                                     # Fase 8
+│   ├── juiz.py, relatorio.py                                     # Fase 8
+│   └── fundir.py                                                 # adaptador fundido ao base (plano B do vLLM e Fase 9)
 └── tests/                         # test_schema.py, test_validar.py, test_evaluate.py
 ```
 
@@ -186,21 +187,23 @@ Os ids são fixos. Ao refazer a 1.3, `python -m src.data.separar_teste` só atua
 - **6.1** `scripts/spark_construir.sh`: imagem `unsloth-dgx-spark` (Dockerfile oficial) e `phishexplain-unsloth:0.1` (+ projeto e matplotlib, com o torch da NGC travado).
 - **6.2** `python -m src.ambiente` (o notebook roda dentro da imagem); `scripts/spark_container.sh` abre um terminal na imagem para depurar.
 - **6.3** `git clone`; o notebook reconstrói os dados com a Fase 1 (`baixar`, `normalizar`, `limpar`, `agrupar`, `separar_teste`), que é determinística. O `splits/teste.csv` no git garante o mesmo teste.
-- **6.4** `src/servidor.py` roda **no host**, só com a biblioteca padrão: `python()`/`modulo()` executam cada passo na imagem do projeto, e `subir()`/`parar()` controlam o vLLM num container próprio (a imagem da Unsloth não traz vLLM), pela imagem `PHISH_VLLM_IMAGEM` (padrão `nvcr.io/nvidia/vllm:26.09-py3`; a 26.01 traz vLLM 0.13 e não serve). Um modelo por vez; parar antes de treinar. Todos os containers rodam com o usuário do host (`--user`, `USER=phish`, `HOME=.home/`, `HF_HOME=/hf`), então nada fica com dono root.
+- **6.4** `src/servidor.py` roda **no host**, só com a biblioteca padrão: `python()`/`modulo()` executam cada passo na imagem do projeto, e `subir()`/`parar()` controlam o vLLM num container próprio (a imagem da Unsloth não traz vLLM), pela imagem `PHISH_VLLM_IMAGEM` (padrão `nvcr.io/nvidia/vllm:26.09-py3`; a 26.01 traz vLLM 0.13 e não serve). Um modelo por vez; parar antes de treinar. `checar_vllm()` confere a versão da imagem (>= 0.17) e tira `--language-model-only` das flags se a imagem não a conhecer. Sem `--kv-cache-dtype fp8` (o Qwen3.5 híbrido usa pouco cache KV e o fp8 é risco no GB10). Todos os containers rodam com o usuário do host (`--user`, `USER=phish`, `HOME=.home/`, `HF_HOME=/hf`), então nada fica com dono root.
 
 ### Fases 7 e 8 — Rodada completa e resultados (notebook)
 
-`notebooks/spark.ipynb` (gerado por `scripts/montar_notebook.py`; edite o script e gere de novo), pedido do usuário em 2026-11-12. Roda no host da Spark e faz tudo sozinho: clona o repositório, constrói as imagens, sobe e desliga cada LLM; vazão do professor e estimativa de tempo; tradução, sintéticos e anotação; splits, exportação, vazamento; professor, baseline e alunos em zero-shot; treinos (Gemma 4 E2B, Qwen3.5-4B, S5-nano); previsões com LoRA; juiz `mistralai/Mistral-Small-3.2-24B-Instruct-2506` (outra família, cego); `reports/resultados.md` com métricas por recorte, McNemar das perguntas de pesquisa, recall por campanha do RNP, notas do juiz, erros por fonte e marcadores do treino.
+`notebooks/spark.ipynb` (gerado por `scripts/montar_notebook.py`; edite o script e gere de novo), pedido do usuário em 2026-11-12. Roda no host da Spark e faz tudo sozinho: clona o repositório, constrói as imagens, sobe e desliga cada LLM; vazão do professor e estimativa de tempo; tradução, sintéticos e anotação; splits, exportação, vazamento; professor, baseline e alunos em zero-shot; treinos (Gemma 4 E2B, Qwen3.5-4B, S5-nano); previsões com LoRA; juiz `mistralai/Mistral-Small-3.2-24B-Instruct-2506` (outra família, cego; se o servidor recusar saída estruturada, repete sem ela); `reports/resultados.md` e `reports/f1.png` com métricas por recorte, McNemar das perguntas de pesquisa, recall por campanha do RNP, notas do juiz, erros por fonte e marcadores do treino.
+
+Robustez (2026-11-26): previsões de zero-shot e LoRA são puladas quando já estão completas (≥ 95% do teste); se o vLLM recusar o adaptador, os pedidos falharem ou as respostas saírem iguais às do zero-shot, o notebook funde o adaptador (`src.fundir`) e serve `outputs/<aluno>/fundido`. As notas do juiz são identificadas por modelo, e-mail e hash da resposta; notas de respostas que não existem mais são descartadas. O notebook inteiro foi executado no PC com um `docker` falso (passos locais, vLLM simulado por um servidor OpenAI falso, treino e vazamento simulados), incluindo o plano B do LoRA e a Fase 9.
 
 ### Fase 9 — Opcional
 
-Exportar o melhor modelo para GGUF.
+No notebook, com `EXPORTAR_GGUF = True`: funde o aluno LoRA de maior F1 total e converte para GGUF Q8_0 com o `convert_hf_to_gguf.py` do llama.cpp (clonado em `.home/llama.cpp`).
 
 ## 8. Próximo passo
 
 **Rodar o notebook na Spark** (`Run All` no host; depende de o repositório estar no GitHub, porque o notebook clona de lá). Depois: revisar `data/interim/revisao_sinteticos.md` (50 sintéticos), `reports/vazamento.csv` (topo) e dar notas aos 30 casos de `reports/calibracao_juiz.md`; commitar `splits/treino.csv`, `splits/validacao.csv` e `reports/`; preencher resultados e limitações do `README.md`.
 
-Pontos a confirmar na primeira execução na Spark: a tag da imagem do vLLM (precisa de vLLM >= 0.17 com Qwen3.5); se o vLLM aceita os adaptadores LoRA dos alunos multimodais com `--language-model-only`; o template do Gemma 4 no `train.prompt_completion` (se não renderizar como prefixo, cai no `eos_token`).
+Pontos a confirmar na primeira execução na Spark: a tag da imagem do vLLM (o notebook já checa vLLM >= 0.17); se o vLLM aceita os adaptadores LoRA dos alunos multimodais (senão o plano B com o modelo fundido entra sozinho); o template do Gemma 4 no `train.prompt_completion` (se não renderizar como prefixo, cai no `eos_token`).
 
 ## 9. Andamento
 
@@ -213,6 +216,6 @@ Pontos a confirmar na primeira execução na Spark: a tag da imagem do vLLM (pre
 - [x] Fase 6: Dockerfile, scripts, checagem de ambiente, vLLM em container (não executado: precisa da Spark)
 - [x] Notebook da Spark (Fases 7 e 8) escrito
 - [ ] Rodada completa na Spark (usuário)
-- [ ] Fase 9: demo (opcional)
+- [x] Fase 9: exportação GGUF no notebook (opcional, `EXPORTAR_GGUF`)
 
 Atualize esta lista ao concluir cada passo.
